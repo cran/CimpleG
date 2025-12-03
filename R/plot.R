@@ -1,0 +1,1031 @@
+# TODO make dmsv_plot the default of this kind
+
+#' Creates the old version of the difference in means by sum of variances plot
+#'
+#' Represent CpGs in the difference in means, sum of variances space.
+#' This plot is often used to select CpGs that would be good classifiers.
+#' These CpGs are often located on the bottom left and
+#' bottom right of this plot.
+#'
+#' @param data Data to create difference in means, sum of variances plot.
+#'  Either a data.frame with `xcol`,`ycol` and `feature_id_col` or, if
+#'  `target_vector` is not `NULL` a matrix with beta values from which,
+#'  given the target, the difference in means between the target and others,
+#'  and the sum of variances within the target and others will be calculated.
+#'
+#' @param xcol Column with x-axis data
+#' @param ycol Column with y-axis data
+#' @param feature_id_col Column with the feature ID
+#' @param is_feature_selected_col NULL or column with TRUE/FALSE for features which should be highlighted as selected
+#' @param label_var1 Label of the target class
+#' @param label_var2 Label of the other classes
+#' @param target_vector if not NULL a vector target class assignment, see data
+#' @param mean_cutoff a numeric draw mean cutoff at given position
+#' @param var_cutoff a numeric draw variance cutoff at given position
+#' @param threshold_func specification of the parabola function, see examples
+#' @param func_factor argument to be passed to the parabola function, see examples
+#' @param feats_to_highlight features (CpGs) to be highlighted in the plot
+#' @param cpg_ranking_df data.frame with ranked features (CpGs) to be highlighted in the plot, if present must have the following columns: .id, predType, Rank and DiffAndFoldScaledAUPR
+#' @param color_all_points color that all non-highlighted points should have, argument defaults to NULL, the default color is black
+#' @param plot_density A boolean, if TRUE (default) the function will produce density plots on top/side of scatterplot
+#' @param density_type One of "density", "histogram", "boxplot", "violin" or "densigram". Defines the type of density plot if `plot_density = TRUE`
+#' @param plot_dir path to directory where to save the plot. If NULL (default), plot will not be saved.
+#' @param id_tag character string to identify plots, is displayed in the plot and present in the file name
+#' @param file_tag character string to identify plots, tags only the file name
+#' @param custom_mods a boolean, if TRUE will add some custom labels to the plot. Default is FALSE 
+#' @return a \code{ggplot2} object with the dmsv plot.
+#'
+#' @examples
+#' library("CimpleG")
+#'
+#' # read data
+#' data(train_data)
+#' data(train_targets)
+#'
+#' # make basic plot
+#' plt <- diffmeans_sumvariance_plot(
+#'   train_data,
+#'   target_vector = train_targets$blood_cells == 1
+#' )
+#' print(plt)
+#'
+#' # make plot with parabola, colored and highlighted features
+#' df_dmeansvar <- compute_diffmeans_sumvar(
+#'   train_data,
+#'   target_vector = train_targets$blood_cells==1
+#' )
+#' parab_param <- .7
+#' df_dmeansvar$is_selected <- select_features(
+#'     x = df_dmeansvar$diff_means,
+#'     y = df_dmeansvar$sum_variance,
+#'     a = parab_param
+#' )
+#'
+#' plt <- diffmeans_sumvariance_plot(
+#'   data=df_dmeansvar,
+#'   label_var1="Leukocytes",
+#'   color_all_points="red",
+#'   is_feature_selected_col="is_selected",
+#'   feats_to_highlight=c("cg10456121"),
+#'   threshold_func=function(x,a) (a*x)^2,
+#'   func_factor=parab_param
+#' )
+#' print(plt)
+#' @export
+diffmeans_sumvariance_plot <- function(
+  data,
+  xcol = "diff_means",
+  ycol = "sum_variance",
+  feature_id_col = "id",
+  is_feature_selected_col = NULL,
+  label_var1 = "Target",
+  label_var2 = "Others",
+  target_vector = NULL,
+  mean_cutoff = NULL,
+  var_cutoff = NULL,
+  threshold_func = NULL,
+  func_factor = NULL,
+  feats_to_highlight = NULL,
+  cpg_ranking_df = NULL,
+  color_all_points = NULL,
+  plot_density = TRUE,
+  density_type = c("density", "histogram", "boxplot", "violin", "densigram"),
+  plot_dir = NULL,
+  id_tag = NULL,
+  file_tag = NULL,
+  custom_mods = FALSE
+){
+
+  if(!is.null(target_vector)){
+    assertthat::assert_that(is.matrix(data)|is.data.frame(data))
+    assertthat::assert_that(is.logical(target_vector))
+    data <- compute_diffmeans_sumvar(data,target_vector = target_vector)
+  }
+
+  data <- as.data.frame(data)
+
+  assertthat::assert_that(xcol %in% colnames(data))
+  assertthat::assert_that(ycol %in% colnames(data))
+
+  if(!feature_id_col %in% colnames(data)){
+    data[,feature_id_col] = rownames(data)
+  }
+  assertthat::assert_that(feature_id_col %in% colnames(data))
+
+  assertthat::assert_that(
+    typeof(label_var1) == 'character' && typeof(label_var2) == 'character'
+  )
+  # NULL or else
+  assertthat::assert_that(
+    is_feature_selected_col %in% colnames(data) || is.null(is_feature_selected_col)
+  )
+  assertthat::assert_that(typeof(mean_cutoff) == 'double' || is.null(mean_cutoff))
+  assertthat::assert_that(typeof(var_cutoff) == 'double' || is.null(var_cutoff))
+  assertthat::assert_that(typeof(func_factor) == 'double' || is.null(func_factor))
+  assertthat::assert_that(is.function(threshold_func) || is.null(threshold_func))
+
+  density_type <- match.arg(density_type)
+
+  best_cpgs_df<-NULL
+  if(!is.null(cpg_ranking_df)){
+    if(!all(c(".id","predType","DiffAndFoldScaledAUPR")%in%colnames(cpg_ranking_df))){
+      warning(".id, predType, Rank and DiffAndFoldScaledAUPR columns not present in cpg_ranking_df. cpg_ranking_df won't be used")
+    }else{
+      best_cpgs_df<-cpg_ranking_df[cpg_ranking_df$Rank<=min(10,nrow(cpg_ranking_df)),]
+    }
+  }
+
+  # setting colors
+  points_color <- ifelse(!is.null(color_all_points),color_all_points,"black")
+  light_points_color <- lighten(points_color,0.7)
+
+  #message("plt diffMean,sumVariance")
+  if(!is.null(is_feature_selected_col)){
+    plt_diffMeanSumVar <- ggplot2::ggplot(
+      data,
+      ggplot2::aes(
+        x=!!ggplot2::sym(xcol),
+        y=!!ggplot2::sym(ycol),
+        fill=!!ggplot2::sym(is_feature_selected_col),
+        color=!!ggplot2::sym(is_feature_selected_col)
+      )
+    )
+
+    point_color_vec <- ifelse(
+      data[,is_feature_selected_col],
+      points_color,
+      light_points_color
+    )
+    plt_diffMeanSumVar <- plt_diffMeanSumVar +
+      ggplot2::geom_point(
+        colour=point_color_vec,
+        alpha=0.5)
+  }else{
+    plt_diffMeanSumVar <- ggplot2::ggplot(
+      data,
+      ggplot2::aes(x=!!ggplot2::sym(xcol), y=!!ggplot2::sym(ycol))
+    )
+    if(!is.null(feats_to_highlight)){
+      plt_diffMeanSumVar <- plt_diffMeanSumVar +
+        ggplot2::geom_point(
+          data=function(x){x[!x[,feature_id_col] %in% feats_to_highlight,]},
+          colour=points_color,
+          alpha=0.3)+
+        ggplot2::geom_point(
+          data=function(x){x[x[,feature_id_col] %in% feats_to_highlight,]},
+          colour=ifelse(!is.null(best_cpgs_df),"orange3","red"),
+          alpha=1)
+    }else{
+      plt_diffMeanSumVar <- plt_diffMeanSumVar +
+        ggplot2::geom_point(colour=points_color,alpha=0.3)
+    }
+  }
+
+  if(!is.null(best_cpgs_df)){
+    plt_diffMeanSumVar <- plt_diffMeanSumVar + ggplot2::geom_point(
+      data=function(x){x[x[,feature_id_col] %in% best_cpgs_df$.id,]},
+      colour="red",
+      alpha=1
+    )
+
+    best_label <- paste0(best_cpgs_df$Rank,"#",best_cpgs_df$.id)
+
+    plt_diffMeanSumVar <- plt_diffMeanSumVar +
+      ggrepel::geom_label_repel(
+        data = data[best_cpgs_df$.id,],
+        ggplot2::aes(
+          x=!!ggplot2::sym(xcol),
+          y=!!ggplot2::sym(ycol),
+          label=best_label
+        ),
+        fill="white",
+        colour="darkred",
+        segment.size=0.5,
+        segment.color="darkred",
+        direction="both",
+        size=max(3,16/length(best_cpgs_df$.id)),
+        box.padding=.6,
+        force=5,
+        max.iter=10000
+      )
+  }else if(
+    length(feats_to_highlight) < 25 &&
+    length(feats_to_highlight) > 2
+  ){
+    plt_diffMeanSumVar <- plt_diffMeanSumVar +
+      ggrepel::geom_label_repel(
+        data = data[feats_to_highlight,],
+        ggplot2::aes(
+          x=!!ggplot2::sym(xcol),
+          y=!!ggplot2::sym(ycol),
+          label=feats_to_highlight
+        ),
+        fill="white",
+        colour="darkred",
+        segment.size=0.5,
+        segment.color="darkred",
+        direction="both",
+        size=max(3,16/length(feats_to_highlight)),
+        box.padding=.6,
+        force=5,
+        max.iter=10000
+      )
+  }
+
+  if(!is.null(mean_cutoff) & !is.null(var_cutoff)){
+    plt_diffMeanSumVar <- plt_diffMeanSumVar +
+      ggplot2::geom_vline(xintercept = -mean_cutoff, alpha=0.5) +
+      ggplot2::geom_vline(xintercept = mean_cutoff, alpha=0.5) +
+      ggplot2::geom_vline(xintercept = 0, alpha=0.5) +
+      ggplot2::geom_hline(yintercept = var_cutoff, alpha=0.5)
+  }
+
+  plt_diffMeanSumVar <- plt_diffMeanSumVar +
+  ggplot2::labs(
+    x=expression(bar(beta)[paste(cell)] - bar(beta)[paste(others)]),
+    y=expression(var(beta[paste(cell)]) + var(beta[paste(others)])),
+    title=paste0(label_var1," vs ",label_var2),
+    caption=unlist(ifelse(is.null(id_tag),ggplot2::waiver(),id_tag))
+  )
+  # FIXME control creation of simple_plot
+  simple_plot = plt_diffMeanSumVar
+
+  if(!is.null(threshold_func) & !is.null(func_factor)){
+    funlabel <- paste0(
+      "y==",
+      gsub(
+        pattern = "a",
+        x = format(threshold_func)[2],
+        replacement = func_factor
+      )
+    )
+    label_ypos <- stats::quantile(data$sumVariance)["75%"]
+    label_xpos <- 0
+
+
+    if(custom_mods){ # custom mod
+      funlabel <- paste0(
+        "y==",
+        gsub(
+          pattern = "a",
+          x = format(threshold_func)[2],
+          replacement = "r"
+        )
+      )
+      alt_funlabel <- gsub(
+        pattern="y",
+        x=funlabel,
+        replacement=expression(var(beta[paste(cell)]) + var(beta[paste(others)]))
+      )
+      alt_funlabel <- gsub(
+        pattern="x",
+        x=alt_funlabel,
+        replacement=expression(bar(beta)[paste(cell)] - bar(beta)[others])
+      )
+
+      funlabel<-alt_funlabel
+      label_ypos <- (stats::quantile(data[,ycol])["100%"]+stats::quantile(data[,ycol])["75%"])/3
+      label_xpos <- 0.
+
+
+      custom_txt_df <- data.frame(
+        x=c(-1,1),
+        y=c(0,0),
+        txt=c(
+          paste0("n[hypo]==",nrow(data[data[,xcol]<0 & data$selected_feat,])),
+          paste0("n[hyper]==",nrow(data[data[,xcol]>0 & data$selected_feat,]))
+        )
+      )
+
+      plt_diffMeanSumVar <- plt_diffMeanSumVar +
+        ggplot2::geom_text(
+          inherit.aes=FALSE,
+          data=custom_txt_df,
+          ggplot2::aes(x=custom_txt_df$x,y=custom_txt_df$y,label=custom_txt_df$txt),
+          parse=TRUE,
+          size=5,
+          vjust = "inward",
+          hjust = "inward"
+        )
+    }
+    
+    sp_df <- data.frame(x=c(-1,1))
+    simple_plot = simple_plot +
+      ggplot2::stat_function(
+        inherit.aes=FALSE,
+        data = sp_df,
+        ggplot2::aes(sp_df$x),
+        fun=threshold_func,
+        args=func_factor,
+        size=1.5,
+        geom="line",
+        color="grey40"
+      )
+
+    plt_diffMeanSumVar <- plt_diffMeanSumVar +
+      ggplot2::stat_function(
+        inherit.aes=FALSE,
+        data = sp_df,
+        ggplot2::aes(sp_df$x),
+        fun=threshold_func,
+        args=func_factor,
+        size=1.5,
+        geom="line",
+        color="grey40"
+      )+
+      ggplot2::annotate(
+        geom="label",
+        label=funlabel,
+        # size=7,
+        size=5,
+        parse=TRUE,
+        x=label_xpos,y=label_ypos,
+        color="grey40"
+      )
+
+  }
+  if(
+    length(feats_to_highlight)<=2 &&
+    length(feats_to_highlight)>0
+  ){
+    plt_diffMeanSumVar <- plt_diffMeanSumVar +
+      ggrepel::geom_label_repel(
+        data = data[feats_to_highlight,],
+        ggplot2::aes(
+          x=!!ggplot2::sym(xcol),
+          y=!!ggplot2::sym(ycol),
+          label=feats_to_highlight
+        ),
+        arrow = grid::arrow(
+          length = grid::unit(0.05, "npc"),
+          type = "closed",
+          ends = "last"
+        ),
+        fill="white",
+        color="black",
+        segment.color="black",
+        # colour=points_color,
+        # segment.color=lighten(points_color,0.5),
+        segment.size=1.5,
+        direction="both",
+        size=5,
+        box.padding=.6,
+        point.padding=.5,
+        # force=5,
+        # max.iter=10000,
+        xlim=c(-1.,1.),ylim=c(0.3,0.4)
+      )
+      simple_plot = simple_plot +
+        ggrepel::geom_label_repel(
+          data = data[feats_to_highlight,],
+          ggplot2::aes(
+            x=!!ggplot2::sym(xcol),
+            y=!!ggplot2::sym(ycol),
+            label=feats_to_highlight
+          ),
+          arrow = grid::arrow(
+            length = grid::unit(0.05, "npc"),
+            type = "closed",
+            ends = "last"
+          ),
+          fill="white",
+          color="black",
+          segment.color="black",
+          # colour=points_color,
+          # segment.color=lighten(points_color,0.5),
+          segment.size=1.5,
+          direction="both",
+          size=5,
+          box.padding=.6,
+          point.padding=.5,
+          # force=5,
+          # max.iter=10000,
+          xlim=c(-1.,1.),ylim=c(0.3,0.4)
+        )
+  }
+
+  ymaxlim <- ifelse(
+    max(data[,ycol])<0.4,
+    0.4,
+    max(data[,ycol])
+  )
+
+  plt_diffMeanSumVar <- plt_diffMeanSumVar +
+    #scale_color_manual(values = color_vals)+
+    ggplot2::theme_classic(base_size=14)+
+    ggplot2::theme(
+      legend.position="none",
+      axis.title.y = ggplot2::element_text(face="bold",size=22),
+      axis.title.x = ggplot2::element_text(face="bold",size=22),
+      axis.text.x = ggplot2::element_text(face="bold",size=22),
+      axis.text.y = ggplot2::element_text(face="bold",size=22),
+      plot.caption = ggplot2::element_text(size=9)
+    )+
+    ggplot2::xlim(c(-1,1))+
+    ggplot2::ylim(c(0,ymaxlim))
+  #print(plt_diffMeanSumVar)
+
+  simple_plot = simple_plot +
+    ggplot2::theme_classic(base_size=14)+
+    ggplot2::theme(
+      legend.position="none",
+      axis.title.y = ggplot2::element_text(face="bold",size=22),
+      axis.title.x = ggplot2::element_text(face="bold",size=22),
+      axis.text.x = ggplot2::element_text(face="bold",size=22),
+      axis.text.y = ggplot2::element_text(face="bold",size=22),
+      plot.caption = ggplot2::element_text(size=9)
+    )+
+    ggplot2::xlim(c(-1,1))+
+    ggplot2::ylim(c(0,ymaxlim))
+
+  if(plot_density){
+    if(requireNamespace("ggExtra",quietly = TRUE)){
+      plt_diffMeanSumVar <- ggExtra::ggMarginal(
+        p=plt_diffMeanSumVar,
+        data=data,
+        x=xcol,
+        y=ycol,
+        groupFill=!is.null(is_feature_selected_col),
+        groupColour=!is.null(is_feature_selected_col),
+        type=density_type,
+        size=10)
+
+      simple_plot = ggExtra::ggMarginal(
+        p=simple_plot,
+        data=data,
+        x=xcol,
+        y=ycol,
+        groupFill=!is.null(is_feature_selected_col),
+        groupColour=!is.null(is_feature_selected_col),
+        type=density_type,
+        size=10)
+    }else{
+      warning("You need to install the package `ggExtra` to use the plot_density feature.")
+    }
+  }
+
+  fname_tag <- paste0(
+    "target-",
+    label_var1,
+    "_",
+    file_tag,
+    "_",
+    id_tag,
+    format(Sys.time(),"%Y%m%d-%H%M%S")
+  )
+
+  save_different_plot_format(
+    plt = plt_diffMeanSumVar,
+    plot_dir = plot_dir,
+    create_plot_subdir = FALSE,
+    save_device = c("ggplot"),
+    type_name = "diffmean_sumvar_plot",
+    name_tag = fname_tag,
+    formats = c("png"),
+    units = "cm",
+    width = 15,
+    height = 15
+  )
+  save_different_plot_format(
+    plt = plt_diffMeanSumVar,
+    plot_dir = plot_dir,
+    create_plot_subdir = FALSE,
+    save_device = c("ggplot"),
+    type_name = "diffmean_sumvar_simpleplot",
+    name_tag = fname_tag,
+    formats = c("png"),
+    units = "cm",
+    width = 15,
+    height = 15
+  )
+  return(plt_diffMeanSumVar)
+}
+
+
+#' Helper function to lighten up a given color.
+#'
+#' @param color Color name or hex code of a color
+#' @param factor Multiplicative factor by which `color` will be lightened up
+#' @return a character value, hex color code of the lightened color provided
+#' @export
+lighten <- function(color, factor = 0.5) {
+  if ((factor > 1) | (factor < 0)) stop("factor needs to be within [0,1]")
+  col <- grDevices::col2rgb(color)
+  col <- col + (255 - col) * factor
+  col <- grDevices::rgb(t(col), maxColorValue = 255)
+  return(col)
+}
+
+#' Helper function to darken down a given color.
+#'
+#' @param color Color name or hex code of a color
+#' @param factor Multiplicative factor by which `color` will be darkened down
+#' @return a character value, hex color code of the darkened color provided
+#' @export
+darken <- function(color, factor = 0.5) {
+  if ((factor > 1) | (factor < 0)) stop("factor needs to be within [0,1]")
+  col <- grDevices::col2rgb(color)
+  col <- col - col * factor
+  col <- grDevices::rgb(t(col), maxColorValue = 255)
+  return(col)
+}
+
+
+#' Creates the old version of the difference in means by sum of variances plot
+#'
+#' Represent CpGs in the difference in means, sum of variances space.
+#' This plot is often used to select CpGs that would be good classifiers.
+#' These CpGs are often located on the bottom left and
+#' bottom right of this plot.
+#'
+#' @param dat Data to create dmsv plot (difference in means, sum of variances plot).
+#'  Either a data.frame with `x_var`,`y_var` and `id_var` or, if
+#'  `target_vector` is not `NULL` a matrix with beta values from which,
+#'  given the target, the difference in means between the target and others,
+#'  and the sum of variances within the target and others will be calculated.
+#' @param target_vector if not NULL a boolean vector with target class assignment, see data
+#' @param x_var Name of the column with x-axis data (difference of means).
+#' @param y_var Name of the column with y-axis data (sum of variances).
+#' @param id_var Name of the column with the feature/CpG ID.
+#' @param highlight_var (Optional) Name of the column with the highlighted features.
+#'  Values in this column should be boolean (\code{TRUE} for selected,
+#'  \code{FALSE} for not selected).
+#' @param display_var (Optional) Name of the column with the features that should be displayed
+#'  in the plot as a label. Values in this column should be boolean
+#'  (\code{TRUE} for feature that should be displayed,
+#'  \code{FALSE} for feature that should not be displayed).
+#' @param label_var1 Label of the target class. Default is \code{"Target"}.
+#' @param label_var2 Label of the other classes. Default is \code{"Others"}.
+#' @param point_color Color of the features/CpGs in the plot. Default is \code{"black"}.
+#'  If features are highlighted, non-highlighted features will have a lighter color.
+#' @param subtitle Subtitle to be displayed in the plot. Default is \code{NULL}.
+#'
+#' @return a \code{ggplot2} object with the dmsv plot.
+#'
+#' @examples
+#' library("CimpleG")
+#'
+#' # load CimpleG example data
+#' data(train_data)
+#' data(train_targets)
+#'
+#' # make basic plot straight from the data
+#' plt <- dmsv_plot(
+#'   dat = train_data,
+#'   target_vector = train_targets$blood_cells == 1
+#' )
+#' print(plt)
+#'
+#' # make plot with highlighted features
+#' # first create a diffmeans sumvar data frame from the data
+#' df_dmeansvar <- compute_diffmeans_sumvar(
+#'   train_data,
+#'   target_vector = train_targets$blood_cells==1
+#' )
+#' # adding a column to this data frame \code{hl_col} with random CpGs
+#' # selected (as TRUE) or not (as FALSE) to be highlighted and displayed.
+#' df_dmeansvar$hl_col <- sample(c(TRUE,FALSE),nrow(df_dmeansvar),replace=TRUE,prob=c(0.1,0.9))
+#' df_dmeansvar$dp_col <- df_dmeansvar$hl_col
+#'
+#' plt <- dmsv_plot(
+#'   dat=df_dmeansvar,
+#'   highlight_var="hl_col",
+#'   display_var="dp_col",
+#'   label_var1="Leukocytes",
+#'   point_color="red",
+#'   subtitle="method: CimpleG"
+#' )
+#' print(plt)
+#'
+#' @export
+dmsv_plot <- function(
+  dat,
+  target_vector=NULL,
+  x_var="diff_means",
+  y_var="sum_variance",
+  id_var="id",
+  highlight_var=NULL,
+  display_var=NULL,
+  label_var1="Target",
+  label_var2="Others",
+  point_color="black",
+  subtitle=NULL
+){
+  UseMethod("dmsv_plot")
+}
+
+
+#' @export
+dmsv_plot.matrix <- function(
+  dat,
+  target_vector=NULL,
+  x_var="diff_means",
+  y_var="sum_variance",
+  id_var="id",
+  highlight_var=NULL,
+  display_var=NULL,
+  label_var1="Target",
+  label_var2="Others",
+  point_color="black",
+  subtitle=NULL
+){
+
+  assertthat::assert_that(
+    typeof(label_var1) == "character" &&
+      typeof(label_var2) == "character"
+  )
+  assertthat::assert_that(is.matrix(dat))
+  assertthat::assert_that(!is.null(target_vector))
+  assertthat::assert_that(is.logical(target_vector))
+  assertthat::assert_that(length(target_vector)==nrow(dat))
+
+  dat <- as.data.frame(compute_diffmeans_sumvar(dat,target_vector=target_vector))
+
+  if(!is.null(highlight_var)){
+    assertthat::assert_that(typeof(highlight_var) == "character")
+    dat <- dat %>% dplyr::mutate(highlight_features = .data$id %in% highlight_var)
+    highlight_var <- "highlight_features"
+  }
+  if(!is.null(display_var)){
+    assertthat::assert_that(typeof(display_var) == "character")
+    dat <- dat %>% dplyr::mutate(display_features = .data$id %in% display_var)
+    display_var <- "display_features"
+  }
+
+  plt <- dmsv_plot_base(
+    dat=dat,
+    x_var="diff_means",
+    y_var="sum_variance",
+    id_var="id",
+    point_color=point_color,
+    subtitle=subtitle,
+    label_var1=label_var1,
+    label_var2=label_var2,
+    highlight_var=highlight_var,
+    display_var=display_var
+  )
+
+  return(plt)
+}
+
+
+#' @export
+dmsv_plot.data.frame <- function(
+  dat,
+  target_vector=NULL,
+  x_var="diff_means",
+  y_var="sum_variance",
+  id_var="id",
+  highlight_var=NULL,
+  display_var=NULL,
+  label_var1="Target",
+  label_var2="Others",
+  point_color="black",
+  subtitle=NULL
+){
+
+  assertthat::assert_that(
+    typeof(label_var1) == "character" &&
+      typeof(label_var2) == "character"
+  )
+  plt <- dmsv_plot_base(
+    dat=as.data.frame(dat),
+    x_var=x_var,y_var=y_var,
+    id_var=id_var,highlight_var=highlight_var,display_var=display_var,
+    label_var1=label_var1,label_var2=label_var2,point_color=point_color,
+    subtitle=subtitle
+  )
+
+  return(plt)
+}
+
+
+dmsv_plot_base <- function(
+  dat,
+  x_var="diff_means",
+  y_var="sum_variance",
+  id_var="id",
+  highlight_var="highlight_features",
+  display_var="display_features",
+  label_var1="Target",
+  label_var2="Others",
+  point_color="black",
+  subtitle=NULL
+){
+
+  light_points_color <- lighten(point_color, 0.7)
+
+  ymaxlim <- ifelse(max(dat[, y_var]) < 0.4, 0.4, max(dat[,y_var]))
+
+  if(is.null(highlight_var)){
+    highlight_var <- "no_highlights"
+    dat <- dat %>% dplyr::mutate(no_highlights = FALSE)
+  }
+
+  if(is.null(display_var)){
+    display_var <- "no_display"
+    dat <- dat %>% dplyr::mutate(no_display = FALSE)
+  }
+
+  dmsv_plt <-
+    ggplot2::ggplot(
+      dat,
+      ggplot2::aes(
+        x = !!ggplot2::sym(x_var),
+        y = !!ggplot2::sym(y_var),
+        fill = !!ggplot2::sym(highlight_var),
+        color = !!ggplot2::sym(highlight_var),
+      )
+    ) +
+    ggplot2::geom_point(alpha=0.8,color=light_points_color) +
+    ggplot2::geom_point(dat=function(x){x[x[,highlight_var],]},size=2,color=point_color) +
+    ggrepel::geom_label_repel(
+      dat=function(x){x[x[,display_var],]},
+      ggplot2::aes(label=.data$id),
+      fill="white",color="black",
+      force_pull=2,force=2,
+      nudge_x=0,nudge_y = 0.2
+    ) +
+    ggplot2::labs(
+      x = expression(bar(beta)["cell"] - bar(beta)["others"]),
+      y = expression(var(beta["cell"]) + var(beta["others"])),
+      title = paste0(label_var1, " vs ", label_var2),
+      subtitle=unlist(ifelse(is.null(subtitle),ggplot2::waiver(),subtitle))
+    ) +
+    ggplot2::xlim(c(-1, 1)) + ggplot2::ylim(c(0, ymaxlim)) +
+    ggplot2::theme_classic(base_size=18) +
+    ggplot2::theme(legend.position="none")
+
+  return(dmsv_plt)
+}
+
+
+#' CpG signature plot
+#'
+#' @param cpg_obj A CimpleG object, as generated by the CimpleG function. Alternatively a names character vector or list with the signatures.
+#' @param data Matrix or data.frame that should have the samples and signatures to plot.
+#'  Samples should be in rows and probes/CpGs in columns.
+#' @param meta_data Data.frame containing metadata from samples in `data`.
+#' @param sample_id_column Name of the column containing the sample id in the meta_data data.frame
+#' @param true_label_column Name of the column containing the true labels of the samples in the meta_data data.frame
+#' @param color_dict Named string featuring colors as values and labels (true labels) as names
+#' @param color_others The name or hex code of a color by which the non-target samples should be colored by.
+#' @param as_panel A boolean, if TRUE (default) a single figure panel with all the signatures will be generated.
+#'  Otherwise, the individual plots will be returned as a list.
+#' @param is_beta A boolean, if TRUE (default) the values will be plotted in a scale suitable for Beta values.
+#'  Otherwise, the values will be plotted in scale suitable for M values.
+#' @param base_size An integer defining the base size of the text in the plot. Default is `14`.
+#' @param ... Parameters passed to the ggplot2::theme function.
+#' @return A list with the data and the ggplot2 plot object.
+#' @export
+signature_plot <- function(
+  cpg_obj,
+  data,
+  meta_data,
+  sample_id_column,
+  true_label_column,
+  color_dict = NULL,
+  color_others = "black",
+  as_panel = TRUE,
+  is_beta = TRUE,
+  base_size = 14,
+  ...
+){
+  UseMethod("signature_plot")
+}
+
+#' @export
+signature_plot.CimpleG <- function(
+  cpg_obj,
+  data,
+  meta_data,
+  sample_id_column,
+  true_label_column,
+  color_dict = NULL,
+  color_others = "black",
+  as_panel = TRUE,
+  is_beta = TRUE,
+  base_size = 14,
+  ...
+){
+
+  sample_id <- true_label <- NULL
+
+  assertthat::assert_that(is.CimpleG(cpg_obj))
+  assertthat::assert_that(
+    cpg_obj$method %in% c("CimpleG", "CimpleG_parab", "brute_force")
+  )
+  assertthat::assert_that(!is.null(cpg_obj$signatures))
+  assertthat::assert_that(all(cpg_obj$signatures %in% colnames(data)))
+
+  # Note the transformation of the vec values into its names
+  # and the names into its values
+  sig_vec <- cpg_obj$signatures
+  sig_vec <- stats::setNames(names(sig_vec), sig_vec)
+
+  set_meta <- meta_data %>%
+    as.data.frame() %>%
+    dplyr::mutate(
+      sample_id = !!ggplot2::sym(sample_id_column),
+      true_label = !!ggplot2::sym(true_label_column)
+    ) %>%
+    dplyr::select(sample_id, true_label)
+
+  plt_dat <- data[,cpg_obj$signatures] %>% as.data.frame()
+
+  if(!(sample_id_column %in% colnames(plt_dat))){
+    plt_dat <- plt_dat %>% tibble::rownames_to_column("sample_id")
+
+    assertthat::assert_that(
+      any(set_meta$sample_id %in% plt_dat$sample_id),
+      msg = "No meta data sample is found on data (or in datas' row names)."
+    )
+  }
+
+  signature_plot_base(
+    sig_vec = sig_vec,
+    plot_data = plt_dat,
+    meta_data = set_meta,
+    color_dict = color_dict,
+    color_others = color_others,
+    as_panel = as_panel,
+    is_beta = is_beta,
+    base_size = base_size,
+    ...
+  )
+}
+
+#' @export
+signature_plot.character <- function(
+  cpg_obj,
+  data,
+  meta_data,
+  sample_id_column,
+  true_label_column,
+  color_dict = NULL,
+  color_others = "black",
+  as_panel = TRUE,
+  is_beta = TRUE,
+  base_size = 14,
+  ...
+){
+  sample_id <- true_label <- NULL
+
+  assertthat::assert_that(!is.null(names(cpg_obj)))
+  assertthat::assert_that(all(cpg_obj %in% colnames(data)))
+
+  sig_vec <- cpg_obj
+  sig_vec <- stats::setNames(names(sig_vec), sig_vec)
+
+  set_meta <- meta_data %>%
+    as.data.frame() %>%
+    dplyr::mutate(
+      sample_id = !!ggplot2::sym(sample_id_column),
+      true_label = !!ggplot2::sym(true_label_column)
+    ) %>%
+    dplyr::select(sample_id, true_label)
+
+  plt_dat <- data[,names(sig_vec)] %>% as.data.frame()
+
+  if(!(sample_id_column %in% colnames(plt_dat))){
+    plt_dat <- plt_dat %>% tibble::rownames_to_column("sample_id")
+
+    assertthat::assert_that(
+      any(set_meta$sample_id %in% plt_dat$sample_id),
+      msg = "No meta data sample is found on data (or in datas' row names)."
+    )
+  }
+
+  signature_plot_base(
+    sig_vec = sig_vec,
+    plot_data = plt_dat,
+    meta_data = set_meta,
+    color_dict = color_dict,
+    color_others = color_others,
+    as_panel = as_panel,
+    is_beta = is_beta,
+    base_size = base_size,
+    ...
+  )
+}
+
+#' @export
+signature_plot.list <- function(
+  cpg_obj,
+  data,
+  meta_data,
+  sample_id_column,
+  true_label_column,
+  color_dict = NULL,
+  color_others = "black",
+  as_panel = TRUE,
+  is_beta = TRUE,
+  base_size = 14,
+  ...
+){
+
+  sample_id <- true_label <- NULL
+
+  cpg_obj <- unlist(cpg_obj,recursive = TRUE, use.names = TRUE)
+
+  assertthat::assert_that(!is.null(names(cpg_obj)))
+  assertthat::assert_that(all(cpg_obj %in% colnames(data)))
+
+  sig_vec <- cpg_obj
+  sig_vec <- stats::setNames(names(sig_vec), sig_vec)
+
+  set_meta <- meta_data %>%
+    as.data.frame() %>%
+    dplyr::mutate(
+      sample_id = !!ggplot2::sym(sample_id_column),
+      true_label = !!ggplot2::sym(true_label_column)
+    ) %>%
+    dplyr::select(sample_id, true_label)
+
+  plt_dat <- data[,names(sig_vec)] %>% as.data.frame()
+
+  if(!(sample_id_column %in% colnames(plt_dat))){
+    plt_dat <- plt_dat %>% tibble::rownames_to_column("sample_id")
+
+    assertthat::assert_that(
+      any(set_meta$sample_id %in% plt_dat$sample_id),
+      msg = "No meta data sample is found on data (or in datas' row names)."
+    )
+  }
+
+  signature_plot_base(
+    sig_vec = sig_vec,
+    plot_data = plt_dat,
+    meta_data = set_meta,
+    color_dict = color_dict,
+    color_others = color_others,
+    as_panel = as_panel,
+    is_beta = is_beta,
+    base_size = base_size,
+    ...
+  )
+}
+
+signature_plot_base <- function(
+  sig_vec,
+  plot_data,
+  meta_data,
+  color_dict = NULL,
+  color_others = "black",
+  as_panel = TRUE,
+  is_beta = TRUE,
+  base_size = 14,
+  ...
+){
+  sample_id <- true_label <- sig_set <- NULL
+
+  dat <- plot_data %>%
+    dplyr::left_join(meta_data, by = "sample_id") %>%
+    dplyr::arrange(true_label, sample_id) %>%
+    tidyr::pivot_longer(cols = !sample_id & !true_label, names_to = "signatures") %>%
+    dplyr::mutate(sig_set = dplyr::recode(.data$signatures, !!!sig_vec)) %>%
+    dplyr::group_by(sig_set)
+
+  if(is.null(color_dict)){
+    n_color <- (dat$sig_set %>% unique %>% length)
+    color_dict <- if(n_color < 9L) ggsci::pal_nejm()(n_color) else ggsci::pal_ucscgb()(n_color)
+    names(color_dict) <- dat$sig_set %>% unique() %>% sort()
+  }
+
+  ylims <- if(is_beta){c(0,1)}else{
+    val <- max(abs(min(dat$value)),max(dat$value)) * 1.1
+    c(-val,val)
+  }
+
+  plt <- dat %>% dplyr::group_split() %>%
+    purrr::map(function(.sig_set){
+
+      sig_probe <- paste0(.sig_set$signatures)
+      sig_name <- paste0(.sig_set$sig_set)
+      trgt_other_color <- c("Target" = unname(color_dict[unique(.sig_set$sig_set)]), "Others" = color_others)
+
+      .sig_set %>%
+        dplyr::mutate(
+          true_sig = factor(ifelse(.data$true_label == .data$sig_set,"Target", "Others"), levels = c("Target", "Others"))
+        ) %>%
+        ggplot2::ggplot(ggplot2::aes(x = .data$true_sig, y = .data$value, color = .data$true_sig)) +
+        ggplot2::geom_jitter(height = 0, width = .2) +
+        ggplot2::scale_color_manual(values = trgt_other_color) +
+        ggplot2::labs(
+          x = "",
+          y=ifelse(is_beta, "Beta values", "M values"),
+          title = sig_probe, subtitle = sig_name,
+          color = sig_name
+        ) +
+        ggplot2::ylim(ylims) +
+        ggplot2::scale_x_discrete(drop = FALSE) +
+        ggplot2::theme_classic(base_size = base_size) +
+        ggplot2::theme(legend.position = "none", ...)
+    })
+
+  if(as_panel) plt <- plt %>% patchwork::wrap_plots()
+
+  return(list(data = dat, plot = plt))
+}
+
+
