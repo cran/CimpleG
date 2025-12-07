@@ -1,4 +1,4 @@
-a557bb11f8e192f6de1ca4ac1d9db711 *DESCRIPTION
+3437e04ebc5411ef2daf1aba38ff1159 *DESCRIPTION
 d10a07ae5c9a4e4c278821a72dd5d1e5 *NAMESPACE
 a4637a38add280f1ba66214c8ef1d075 *R/CimpleG-package.R
 a9e783bd54364edf89cd8a3576625f8f *R/CimpleG.R
@@ -19,7 +19,7 @@ e2912ad6126990d468701d9140d82688 *R/plot.R
 c47e943893aff60840c52940f718cdd7 *R/prep_summarizedexp_data.R
 a027efe486ead212f8560c751080a23f *R/save_load_helper.R
 b7193d893d1baa7fb7e11fbfb513c663 *R/zzz.R
-e89b9e177997a4182f41e5608a497771 *README.md
+062beedba74c044fb9ab160b4122775e *README.md
 76e123f5dcc8dee07678412adc0a2a84 *build/partial.rdb
 b007db569ba6c0aa17cf2d2db0267ae1 *build/vignette.rds
 1a5c61f89ac86c594da356eb03cbdcbf *data/test_data.rda
@@ -29,10 +29,10 @@ bf5d1bb5338563989b001d6164756058 *data/train_targets.rda
 5fb71068852ee4d1adc9bac80066ae28 *inst/WORDLIST
 e35665a9944d699b1a5ecd12c7c54879 *inst/doc/generate-signatures.R
 02542dc41d3cbf485055ae59723b8731 *inst/doc/generate-signatures.Rmd
-f877a2f9fa2e1ea5597c97618d25f0e0 *inst/doc/generate-signatures.html
+6a0093af6308e673aa443eaafd492c50 *inst/doc/generate-signatures.html
 01880dd8ad45d3600ccae7f2fbeef218 *inst/doc/save_load_objects.R
 7949cb283f6a6fc4101f56094ba98c02 *inst/doc/save_load_objects.Rmd
-a91be778efb704703c11ebd800a6a2e2 *inst/doc/save_load_objects.html
+5143df19176207cba8b1fae9786e4854 *inst/doc/save_load_objects.html
 14de8db9ae828b2e036a5668c6c53dcf *man/CimpleG-package.Rd
 ae14e78246138ae42964ee39c930e113 *man/CimpleG.Rd
 a8f566c6d3bd373a83e4b741298d4fed *man/compute_ax.Rd
@@ -69,7 +69,7 @@ b088a410015c4cee7257d4a3c44b6da2 *tests/testthat/test1-CimpleG-decisiontree.R
 a2be4f0e96195be87b9074d45c769b31 *tests/testthat/test1-CimpleG-nnet.R
 d29cf2044695ff68d92330ddd287cab3 *tests/testthat/test1-CimpleG-rf.R
 098d73af80a5e51571faa184ad232fe4 *tests/testthat/test2-CimpleG-elasticnet.R
-08a6d2736a705a46bf595b419c81fca4 *tests/testthat/test3-CimpleG-xgboost.R
+5de667070b02f4a00da090fd2f6c4fa6 *tests/testthat/test3-CimpleG-xgboost.R
 bb989c8332b173936693f0ae519549c0 *tests/testthat/test4-CimpleG-bruteforce.R
 00662138691a79596bc7842de657b50d *tests/testthat/test5-CimpleG-parab.R
 d41d8cd98f00b204e9800998ecf8427e *tests/testthat/test8-CimpleG-deconvolution.R
